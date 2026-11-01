@@ -45,6 +45,13 @@ typedef struct {
     SleerParams params;
 
     bool show_original;
+    float compare; /* 0 = dithered, 1 = source; the canvas splits in between */
+    bool compare_dragging;
+
+    bool splash; /* startup logo, drawn over the UI until it fades out */
+    uint64_t splash_start;
+
+    bool settings_open; /* placeholder panel behind the cog button */
     bool fit;
     float zoom;
     float pan_x;
@@ -87,6 +94,9 @@ void app_set_palette(App *app, const SleerPaletteData *palette, int preset_index
 void app_apply_preset(App *app, int index);
 
 int app_load(App *app, const char *path);
+
+/* Loads the image on the clipboard; returns 0 on success. */
+int app_paste_clipboard(App *app);
 
 void app_open_dialog(App *app);
 void app_save_dialog(App *app);

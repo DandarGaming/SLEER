@@ -1,5 +1,6 @@
 #include "image.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,54 @@ int sleer_image_load(const char *path, SleerImage *image, char *err, size_t err_
     memset(image, 0, sizeof(*image));
 
     pixels = stbi_load(path, &width, &height, &channels, 4);
+    if (!pixels) {
+        reason = stbi_failure_reason();
+        set_error(err, err_size, reason ? reason : "could not decode image");
+        return -1;
+    }
+
+    if (width <= 0 || height <= 0) {
+        stbi_image_free(pixels);
+        set_error(err, err_size, "image has no pixels");
+        return -1;
+    }
+
+    image->rgba = (uint8_t *)malloc((size_t)width * (size_t)height * 4);
+    if (!image->rgba) {
+        stbi_image_free(pixels);
+        set_error(err, err_size, "out of memory");
+        return -1;
+    }
+
+    memcpy(image->rgba, pixels, (size_t)width * (size_t)height * 4);
+    stbi_image_free(pixels);
+
+    image->width = width;
+    image->height = height;
+    return 0;
+}
+
+int sleer_image_load_memory(const void *data, size_t size, SleerImage *image, char *err,
+                            size_t err_size)
+{
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    unsigned char *pixels;
+    const char *reason;
+
+    if (!data || size == 0 || !image) {
+        set_error(err, err_size, "invalid arguments");
+        return -1;
+    }
+    if (size > (size_t)INT_MAX) {
+        set_error(err, err_size, "image data is too large");
+        return -1;
+    }
+
+    memset(image, 0, sizeof(*image));
+
+    pixels = stbi_load_from_memory((const stbi_uc *)data, (int)size, &width, &height, &channels, 4);
     if (!pixels) {
         reason = stbi_failure_reason();
         set_error(err, err_size, reason ? reason : "could not decode image");

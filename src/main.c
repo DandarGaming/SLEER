@@ -114,16 +114,11 @@ static void update_title(App *app)
     SDL_SetWindowTitle(app->window, title);
 }
 
-int app_load(App *app, const char *path)
+/* Takes ownership of `loaded`: uploads the texture, rebuilds the proxy and
+ * hands the pixels to the worker. The image is freed again on failure. */
+static int adopt_image(App *app, SleerImage *loaded)
 {
-    SleerImage loaded;
-    char error[512];
     int longest;
-
-    if (sleer_image_load(path, &loaded, error, sizeof(error)) != 0) {
-        app_status(app, "Could not open %s: %s", path, error);
-        return -1;
-    }
 
     free_textures(app);
     sleer_image_free(&app->image);
@@ -132,7 +127,8 @@ int app_load(App *app, const char *path)
     app->proxy_width = 0;
     app->proxy_height = 0;
 
-    app->image = loaded;
+    app->image = *loaded;
+    memset(loaded, 0, sizeof(*loaded));
 
     app->tex_original = SDL_CreateTexture(app->renderer, SDL_PIXELFORMAT_RGBA32,
                                           SDL_TEXTUREACCESS_STREAMING, app->image.width,
@@ -180,11 +176,88 @@ int app_load(App *app, const char *path)
     app->pan_x = 0.0f;
     app->pan_y = 0.0f;
     app->show_original = false;
+    app->compare = 0.0f;
+    return 0;
+}
+
+int app_load(App *app, const char *path)
+{
+    SleerImage loaded;
+    char error[512];
+
+    if (sleer_image_load(path, &loaded, error, sizeof(error)) != 0) {
+        app_status(app, "Could not open %s: %s", path, error);
+        return -1;
+    }
+    if (adopt_image(app, &loaded) != 0) {
+        return -1;
+    }
 
     SDL_snprintf(app->file, sizeof(app->file), "%s", path);
     update_title(app);
     app_invalidate(app);
     app_status(app, "Loaded %s (%dx%d)", path, app->image.width, app->image.height);
+    return 0;
+}
+
+int app_paste_clipboard(App *app)
+{
+    static const char *const k_preferred[] = {"image/png", "image/bmp", "image/jpeg",
+                                              "image/gif", "image/x-tga", "image/tga"};
+    void *data = NULL;
+    size_t size = 0;
+    size_t i;
+    char error[512];
+    SleerImage loaded;
+
+    for (i = 0; i < SDL_arraysize(k_preferred) && !data; i++) {
+        if (!SDL_HasClipboardData(k_preferred[i])) {
+            continue;
+        }
+        data = SDL_GetClipboardData(k_preferred[i], &size);
+        if (data && size == 0) {
+            SDL_free(data);
+            data = NULL;
+        }
+    }
+
+    if (!data) {
+        char **mime_types = SDL_GetClipboardMimeTypes(NULL);
+        int index;
+
+        for (index = 0; mime_types && mime_types[index] && !data; index++) {
+            if (SDL_strncasecmp(mime_types[index], "image/", 6) != 0) {
+                continue;
+            }
+            data = SDL_GetClipboardData(mime_types[index], &size);
+            if (data && size == 0) {
+                SDL_free(data);
+                data = NULL;
+            }
+        }
+        SDL_free(mime_types);
+    }
+
+    if (!data) {
+        app_status(app, "The clipboard holds no image - copy one and press Ctrl+V");
+        return -1;
+    }
+
+    if (sleer_image_load_memory(data, size, &loaded, error, sizeof(error)) != 0) {
+        SDL_free(data);
+        app_status(app, "Could not paste the clipboard image: %s", error);
+        return -1;
+    }
+    SDL_free(data);
+
+    if (adopt_image(app, &loaded) != 0) {
+        return -1;
+    }
+
+    app->file[0] = '\0';
+    update_title(app);
+    app_invalidate(app);
+    app_status(app, "Pasted image from the clipboard (%dx%d)", app->image.width, app->image.height);
     return 0;
 }
 
@@ -377,6 +450,10 @@ static void handle_key(App *app, const SDL_KeyboardEvent *event)
         app_save_dialog(app);
         return;
     }
+    if (ctrl && event->key == SDLK_V) {
+        app_paste_clipboard(app);
+        return;
+    }
 
     if (event->key >= SDLK_1 && event->key <= SDLK_9) {
         const int index = (int)(event->key - SDLK_1);
@@ -464,7 +541,9 @@ static void poll_events(App *app)
         case SDL_EVENT_MOUSE_MOTION:
             app->mouse_x = event.motion.x;
             app->mouse_y = event.motion.y;
-            if (app->dragging) {
+            if (app->compare_dragging) {
+                app->compare = panels_compare_at(app, app->mouse_x);
+            } else if (app->dragging) {
                 app->pan_x += app->mouse_x - app->drag_x;
                 app->pan_y += app->mouse_y - app->drag_y;
                 app->drag_x = app->mouse_x;
@@ -478,8 +557,10 @@ static void poll_events(App *app)
             if (event.button.button == SDL_BUTTON_LEFT) {
                 app->mouse_down = true;
                 app->mouse_pressed = true;
-                if (ui_rect_contains(app_canvas_rect(app), app->mouse_x, app->mouse_y) &&
-                    app->image.rgba) {
+                if (panels_compare_grab(app, app->mouse_x, app->mouse_y)) {
+                    app->compare_dragging = true;
+                } else if (ui_rect_contains(app_canvas_rect(app), app->mouse_x, app->mouse_y) &&
+                           app->image.rgba) {
                     app->dragging = true;
                     app->drag_x = app->mouse_x;
                     app->drag_y = app->mouse_y;
@@ -493,6 +574,7 @@ static void poll_events(App *app)
                 app->mouse_down = false;
                 app->mouse_released = true;
                 app->dragging = false;
+                app->compare_dragging = false;
             }
             break;
         case SDL_EVENT_MOUSE_WHEEL: {
@@ -554,6 +636,29 @@ static void poll_events(App *app)
 
 /* ------------------------------------------------------------------ frame */
 
+/* Shows a resize arrow while the compare handle is under the mouse. */
+static void update_canvas_cursor(App *app)
+{
+    static SDL_Cursor *split_cursor;
+    static SDL_Cursor *default_cursor;
+    static bool split_shown;
+    bool over_split;
+
+    if (!split_cursor) {
+        split_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+    }
+    if (!default_cursor) {
+        default_cursor = SDL_GetDefaultCursor();
+    }
+
+    over_split = app->compare_dragging || panels_compare_grab(app, app->mouse_x, app->mouse_y);
+    if (over_split == split_shown) {
+        return;
+    }
+    SDL_SetCursor(over_split ? split_cursor : default_cursor);
+    split_shown = over_split;
+}
+
 static void app_frame(App *app)
 {
     int window_width = 0;
@@ -585,10 +690,13 @@ static void app_frame(App *app)
     SDL_RenderClear(app->renderer);
 
     panels_draw_canvas(app, canvas);
+    update_canvas_cursor(app);
     panels_draw_left(app, (float)window_height);
     panels_draw_right(app, (float)window_width, (float)window_height);
     panels_draw_top_bar(app, (float)window_width);
+    panels_draw_settings(app, (float)window_width, (float)window_height);
     panels_draw_status(app, (float)window_width, (float)window_height);
+    panels_draw_splash(app, (float)window_width, (float)window_height);
 }
 
 /* -------------------------------------------------------------- smoke test */
@@ -796,6 +904,65 @@ static int app_smoke_test(App *app, const char *input, const char *output)
         app_invalidate(app);
     }
 
+    /* The compare split is dragged on the canvas, not only with the slider. */
+    {
+        const UiRect canvas = app_canvas_rect(app);
+        const float before_pan = app->pan_x;
+        float image_w;
+        float image_h;
+        float dest_x;
+        float dest_y;
+        float split_x;
+
+        app->compare = 0.5f;
+        app_frame(app);
+        SDL_RenderPresent(app->renderer);
+        ui_end_frame(&app->ui);
+
+        image_w = (float)app->image.width * app->zoom;
+        image_h = (float)app->image.height * app->zoom;
+        dest_x = canvas.x + (canvas.w - image_w) * 0.5f + app->pan_x;
+        dest_y = canvas.y + (canvas.h - image_h) * 0.5f + app->pan_y;
+        split_x = dest_x + image_w * 0.5f;
+
+        if (!panels_compare_grab(app, split_x, dest_y + image_h * 0.5f)) {
+            SDL_Log("smoke test: the compare handle is not grabbable at the split");
+            return 1;
+        }
+
+        push_mouse(SDL_EVENT_MOUSE_MOTION, split_x, dest_y + image_h * 0.5f, false);
+        push_mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, split_x, dest_y + image_h * 0.5f, true);
+        poll_events(app);
+        app_frame(app);
+
+        push_mouse(SDL_EVENT_MOUSE_MOTION, split_x + image_w * 0.25f, dest_y + image_h * 0.5f,
+                   true);
+        poll_events(app);
+        app_frame(app);
+
+        push_mouse(SDL_EVENT_MOUSE_BUTTON_UP, split_x + image_w * 0.25f,
+                   dest_y + image_h * 0.5f, false);
+        poll_events(app);
+        app_frame(app);
+        SDL_RenderPresent(app->renderer);
+        ui_end_frame(&app->ui);
+
+        if (app->compare < 0.6f) {
+            SDL_Log("smoke test: dragging the compare handle did not move the split (%.2f)",
+                    (double)app->compare);
+            return 1;
+        }
+        if (app->pan_x != before_pan) {
+            SDL_Log("smoke test: dragging the compare handle panned the image");
+            return 1;
+        }
+        SDL_Log("smoke test: dragging the compare handle moved the split to %.0f%%",
+                (double)app->compare * 100.0);
+
+        app->compare = 0.0f;
+        app->compare_dragging = false;
+    }
+
     /* The interactive loop asks for a full-resolution pass once the user stops;
      * exercise that path here so the smoke test covers both tiers. */
     {
@@ -926,6 +1093,12 @@ int main(int argc, char *argv[])
         return 1;
     }
     worker_set_palette(app.worker, app.palette.colors, app.palette.count);
+
+    /* The logo splash is a launch effect; the smoke test needs a clean screen. */
+    if (!smoke_input && !smoke_output) {
+        app.splash = true;
+        app.splash_start = SDL_GetTicks();
+    }
 
     if (smoke_input || smoke_output) {
         exit_code = app_smoke_test(&app, smoke_input, smoke_output);

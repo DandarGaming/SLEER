@@ -26,6 +26,9 @@ extern const SDL_Color UI_COLOR_ACCENT;
 extern const SDL_Color UI_COLOR_TEXT;
 extern const SDL_Color UI_COLOR_TEXT_DIM;
 
+/* Green kept for the splash mascot, separate from the crimson UI accent. */
+extern const SDL_Color UI_COLOR_SNAKE;
+
 typedef struct {
     float x;
     float y;

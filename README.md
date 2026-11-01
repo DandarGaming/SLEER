@@ -19,13 +19,22 @@ plain colour reduction. Audio and video are not implemented yet.
   Teletext, Apple II, Commodore 64, ZX Spectrum, Vaporwave and Hacker.
 - **Palette editor** — click a swatch, drag its R/G/B sliders, add or remove
   colours, or extract a palette from the image with median cut.
-- **Brightness bias** to push the pattern lighter or darker, live preview, source
-  vs. dither comparison, zoom and pan.
+- **Brightness bias** to push the pattern lighter or darker, live preview, zoom
+  and pan.
+- **Compare slider** that wipes the source over the dithered result, so you can
+  judge a setting without toggling views.
+- **Settings cog** in the top bar, opening a placeholder panel where renderer,
+  input and palette options will go.
+- **Startup splash**: the window opens on a CLI-style banner - block SLEER
+  wordmark with a drop shadow, welcome and version lines, corner frame and a
+  three-headed snake mascot - which holds for a moment and then fades into the
+  app.
 - **Smooth sliders**: dithering runs on a background thread. While settings are
   changing it renders a downscaled proxy; a full-resolution pass is queued once
   you stop (and again for every save).
 - **Loads** PNG, JPEG, BMP, TGA, GIF, PSD, HDR and PNM; saves RGB PNG. Drop a
-  file onto the window to open it.
+  file onto the window to open it, or paste one from the clipboard with `Ctrl+V`
+  (or the Paste button).
 
 ## Build
 
@@ -69,13 +78,19 @@ sleer --smoke-test in.png out.png     # scripted self-check, see Testing
 ```
 
 The left panel holds the presets and the palette editor; the right panel holds
-the dithering mode, kernel, matrix size and bias. "Viewing: dither" in the top
-bar switches to the unprocessed source.
+the dithering mode, kernel, matrix size, the compare slider and the bias.
+"Viewing: dither" in the top bar switches to the unprocessed source.
+
+Drag the compare slider (or use it while tweaking settings) to wipe the source
+over the dithered result on the canvas: 0% shows only the dither, 100% only the
+source. The split can also be grabbed and dragged directly on the image - the
+cursor turns into a resize arrow over the handle.
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+O` | Open image |
 | `Ctrl+S` | Save dithered PNG |
+| `Ctrl+V` | Paste an image from the clipboard |
 | `1` … `9` | Pick a diffusion kernel |
 | `T` | Cycle dithering mode |
 | `[` / `]` | Bias down / up |

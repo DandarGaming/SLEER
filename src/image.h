@@ -17,6 +17,10 @@ typedef struct {
 /* Loads PNG, JPEG, BMP, TGA, GIF, PSD, HDR or PNM. Returns 0 on success. */
 int sleer_image_load(const char *path, SleerImage *image, char *err, size_t err_size);
 
+/* Same, but decodes an in-memory file (used for clipboard images). */
+int sleer_image_load_memory(const void *data, size_t size, SleerImage *image, char *err,
+                            size_t err_size);
+
 void sleer_image_free(SleerImage *image);
 
 /* Writes an RGBA buffer as an RGB PNG (alpha is dropped). */
